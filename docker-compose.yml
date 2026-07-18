@@ -1,16 +1,21 @@
 version: "3.9"
-
 services:
   ollama:
     image: ollama/ollama:latest
     container_name: agentic-ollama
     ports:
-      - "11434:11434"          # Ollama's default REST API port
+      - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama   # persist downloaded models between restarts
+      - ollama_data:/root/.ollama
     environment:
-      - OLLAMA_KEEP_ALIVE=24h  # keep model loaded in memory, avoids cold-start
+      OLLAMA_KEEP_ALIVE: 24h
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 && bash -c '</dev/tcp/127.0.0.1/11434'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 volumes:
-  ollama_data:                 # named volume = survives `docker compose down`
+  ollama_data:
