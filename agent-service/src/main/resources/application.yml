@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: agent-service
+  ai:
+    ollama:
+      base-url: http://ollama:11434
+      chat:
+        model: llama3.1
+        options:
+          temperature: 0.7
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.springframework.ai: DEBUG
