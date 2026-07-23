@@ -18,8 +18,121 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      langfuse-web:
+        condition: service_started
     environment:
       - SPRING_AI_OLLAMA_BASE_URL=http://ollama:11434
 
+      # Attach the OTel Java agent before Spring Boot starts
+      - JAVA_TOOL_OPTIONS=-javaagent:/app/otel-agent.jar
+
+      # Identify this service in traces
+      - OTEL_SERVICE_NAME=agent-service
+
+      # Send OTLP/HTTP protobuf to Langfuse over the Compose network
+      - OTEL_TRACES_EXPORTER=otlp
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://langfuse-web:3000/api/public/otel
+      - OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20${LANGFUSE_AUTH_HEADER}
+      # Keep this phase focused on traces
+      - OTEL_METRICS_EXPORTER=none
+      - OTEL_LOGS_EXPORTER=none
+
+      # Temporary: makes exporter errors visible in container logs
+      - OTEL_LOG_LEVEL=debug
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=langfuse
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=langfuse
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=clickhouse
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: --requirepass ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    entrypoint: /bin/sh
+    command: -c 'mkdir -p /data/langfuse && minio server /data --console-address ":9091"'
+    ports:
+      - "9090:9000"
+      - "9091:9091"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse-web:
+    image: langfuse/langfuse:3
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://langfuse:${POSTGRES_PASSWORD}@postgres:5432/langfuse
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - CLICKHOUSE_MIGRATION_URL=clickhouse://clickhouse:9000
+      - CLICKHOUSE_USER=clickhouse
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_CLUSTER_ENABLED=false
+      - REDIS_CONNECTION_STRING=redis://:${REDIS_PASSWORD}@redis:6379
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=langfuse
+      - LANGFUSE_S3_EVENT_UPLOAD_REGION=us-east-1
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=minioadmin
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=http://localhost:3000
+      - SALT=${LANGFUSE_SALT}
+      - ENCRYPTION_KEY=${LANGFUSE_ENCRYPTION_KEY}
+
 volumes:
   ollama_data:
+  postgres_data:
+  clickhouse_data:
+  minio_data:
